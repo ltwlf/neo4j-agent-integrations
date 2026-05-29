@@ -81,5 +81,5 @@ Set these in `microsoft-foundry/.env`:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `FOUNDRY_QUESTION` | "Research Microsoft's position…" | The single user question. Pick something that exercises both database and analyst. |
-| `FOUNDRY_MODEL_DEPLOYMENT_NAME` | `gpt-4o-mini` | Model to run all three agents on. |
+| `FOUNDRY_MODEL_DEPLOYMENT_NAME` | `gpt-5-mini` | Model to run all three agents on. |
 | `NEO4J_URI` / `NEO4J_DATABASE` / `NEO4J_USERNAME` / `NEO4J_PASSWORD` | demo graph | Point at your own Aura or self-managed Neo4j. |

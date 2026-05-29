@@ -340,7 +340,7 @@ async def main() -> None:
 
         client = FoundryChatClient(
             project_endpoint=project_endpoint,
-            model=os.environ.get("FOUNDRY_MODEL_DEPLOYMENT_NAME", "gpt-4o-mini"),
+            model=os.environ.get("FOUNDRY_MODEL_DEPLOYMENT_NAME", "gpt-5-mini"),
             credential=AzureCliCredential(tenant_id=tenant_id),
         )
 

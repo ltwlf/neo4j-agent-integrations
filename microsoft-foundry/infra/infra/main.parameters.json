@@ -57,10 +57,10 @@
       "value": "${CREATE_FOUNDRY_PROJECT=true}"
     },
     "foundryModelName": {
-      "value": "${FOUNDRY_MODEL_NAME=gpt-4o-mini}"
+      "value": "${FOUNDRY_MODEL_NAME=gpt-5-mini}"
     },
     "foundryModelVersion": {
-      "value": "${FOUNDRY_MODEL_VERSION=2024-07-18}"
+      "value": "${FOUNDRY_MODEL_VERSION=2025-08-07}"
     },
     "foundryModelSkuName": {
       "value": "${FOUNDRY_MODEL_SKU=GlobalStandard}"

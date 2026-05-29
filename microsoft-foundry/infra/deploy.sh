@@ -31,7 +31,7 @@ foundry_resource_group=""
 foundry_account_name=""
 foundry_project_name=""
 foundry_project_endpoint=""
-foundry_model_deployment_name="gpt-4o-mini"
+foundry_model_deployment_name="gpt-5-mini"
 foundry_embedding_deployment_name="text-embedding-3-small"
 neo4j_mcp_connection_name=""
 

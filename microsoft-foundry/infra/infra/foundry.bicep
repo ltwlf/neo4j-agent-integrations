@@ -9,7 +9,7 @@ param baseName string
 @description('Common tags applied to all resources.')
 param commonTags object
 
-@description('Foundry model name (e.g. gpt-4o-mini).')
+@description('Foundry model name (e.g. gpt-5-mini).')
 param modelName string
 
 @description('Foundry model version. Required for Azure OpenAI model deployments.')

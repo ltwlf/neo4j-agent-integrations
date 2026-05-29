@@ -87,8 +87,8 @@ deployment also creates:
   (`Microsoft.CognitiveServices/accounts`, kind `AIServices`,
   with `allowProjectManagement: true`)
 - Foundry project: `proj-foundry-neo4j-dev`
-- Model deployment: `gpt-4o-mini`
-  (version `2024-07-18`, `GlobalStandard`, capacity 30)
+- Model deployment: `gpt-5-mini`
+  (version `2025-08-07`, `GlobalStandard`, capacity 30)
 - Foundry User role assignment for the signed-in user on the
   Foundry **project**, so `az login` is all the auth the examples
   need (create/run agents, call models via the project endpoint)
@@ -194,16 +194,17 @@ The next `./deploy.sh` re-runs `azd up` and adds the missing
 role assignment.
 
 **`azd up` fails with `DeploymentModelNotSupported` or a quota error.**
-The default model `gpt-4o-mini` (version `2024-07-18`) is broadly
+The default model `gpt-5-mini` (version `2025-08-07`) is broadly
 available, but not in every region. Foundry agent APIs are supported
 in `eastus`, `eastus2`, `swedencentral`, `westus`, `westus3`, and
 others; Foundry hosted agents narrow that to Sweden Central, North
-Central US, Canada Central, and Australia East. To switch models,
-set overrides before running `./deploy.sh`:
+Central US, Canada Central, and Australia East. To switch models —
+for example to the faster/cheaper non-reasoning `gpt-4.1-mini`, or to a
+newer `gpt-5.4-mini` — set overrides before running `./deploy.sh`:
 
 ```bash
-azd env set FOUNDRY_MODEL_NAME gpt-5-mini
-azd env set FOUNDRY_MODEL_VERSION 2025-08-07
+azd env set FOUNDRY_MODEL_NAME gpt-4.1-mini
+azd env set FOUNDRY_MODEL_VERSION 2025-04-14
 ./deploy.sh
 ```
 

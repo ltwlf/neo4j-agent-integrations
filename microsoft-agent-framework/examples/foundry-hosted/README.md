@@ -57,9 +57,9 @@ azd init -t Azure-Samples/azd-ai-starter-basic --location swedencentral
 
 # 2. Add the agent on top, pointing at the existing Foundry project + model
 azd ai agent init \
-  -m https://raw.githubusercontent.com/<owner>/neo4j-agent-integrations/feature/agent-framework/microsoft-agent-framework/examples/foundry-hosted/agent.manifest.yaml \
+  -m https://raw.githubusercontent.com/neo4j-labs/neo4j-agent-integrations/main/microsoft-agent-framework/examples/foundry-hosted/agent.manifest.yaml \
   -p "$PROJECT_ID" \
-  -d gpt-4o-mini
+  -d gpt-5-mini
 
 # 3. Wire Neo4j (defaults connect to the public companies demo graph) +
 #    the embedding deployment that microsoft-foundry/infra/ provisioned

@@ -76,10 +76,10 @@ param neo4jAllowedOrigins string = ''
 param createFoundryProject string = 'true'
 
 @description('Foundry model deployment name. Must match a model available in the chosen region.')
-param foundryModelName string = 'gpt-4o-mini'
+param foundryModelName string = 'gpt-5-mini'
 
 @description('Foundry model version. Required for Azure OpenAI model deployments.')
-param foundryModelVersion string = '2024-07-18'
+param foundryModelVersion string = '2025-08-07'
 
 @description('Foundry model deployment SKU. Most modern Foundry models use GlobalStandard.')
 param foundryModelSkuName string = 'GlobalStandard'
