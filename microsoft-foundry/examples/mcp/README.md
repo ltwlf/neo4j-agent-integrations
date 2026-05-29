@@ -16,7 +16,7 @@ That gives you:
 
 - A public Neo4j MCP endpoint on Azure Container Apps.
 - A Foundry account, project, and `gpt-4o-mini` model deployment.
-- An Azure AI Developer role assignment for your user.
+- A Foundry User role assignment on the project for your user.
 - A populated `microsoft-foundry/.env` — you'll need one value from it: `NEO4J_MCP_ENDPOINT`.
 
 ## 2. Open the project in Foundry portal

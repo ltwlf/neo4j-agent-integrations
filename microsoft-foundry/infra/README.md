@@ -89,9 +89,9 @@ deployment also creates:
 - Foundry project: `proj-foundry-neo4j-dev`
 - Model deployment: `gpt-4o-mini`
   (version `2024-07-18`, `GlobalStandard`, capacity 30)
-- Azure AI Developer role assignment for the signed-in user on
-  the Foundry account, so `az login` is all the auth the
-  examples need
+- Foundry User role assignment for the signed-in user on the
+  Foundry **project**, so `az login` is all the auth the examples
+  need (create/run agents, call models via the project endpoint)
 
 The hash keeps the account's custom subdomain globally unique
 while remaining deterministic for the same deployment inputs.
@@ -179,7 +179,7 @@ can stall while waiting for a token refresh. Run `az login`
 and try again.
 
 **Foundry was provisioned but the smoke test or examples return 403.**
-The Azure AI Developer role assignment requires
+The Foundry User role assignment requires
 `AZURE_PRINCIPAL_ID`. In `az cli` auth mode that value can be
 empty, which causes the Bicep deployment to skip the role
 assignment. Fix it with:
