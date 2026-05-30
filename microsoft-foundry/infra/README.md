@@ -6,6 +6,7 @@ Microsoft Agent Framework, and any other MCP client.
 
 ## Prerequisites
 
+- [Azure CLI (`az`)](https://learn.microsoft.com/cli/azure/install-azure-cli)
 - [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
 - An Azure subscription with permission to create resource groups,
   Container Apps environments, and Log Analytics workspaces

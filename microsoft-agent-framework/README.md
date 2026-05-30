@@ -24,6 +24,16 @@ flowchart LR
 
 Both examples implement the same multi-agent graph. The local example runs your code; the hosted example runs that code inside Foundry's managed runtime.
 
+## Prerequisites
+
+- [Azure CLI (`az`)](https://learn.microsoft.com/cli/azure/install-azure-cli)
+- [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
+- [Python 3.11+](https://www.python.org/downloads/)
+- [`uv`](https://docs.astral.sh/uv/)
+- An Azure subscription you can deploy to
+
+For Azure provisioning of the shared Neo4j MCP server and Foundry project, use the streamlined setup in [`../microsoft-foundry/infra/README.md`](../microsoft-foundry/infra/README.md).
+
 ## Quick start
 
 ```bash
