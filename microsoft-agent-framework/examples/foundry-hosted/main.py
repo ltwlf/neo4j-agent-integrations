@@ -31,6 +31,20 @@ from pydantic import Field
 
 load_dotenv()
 
+
+def configure_demo_observability() -> None:
+    """Keep demo logs readable when optional hosted-agent telemetry is unavailable."""
+    if not os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+        os.environ.pop("APPLICATIONINSIGHTS_CONNECTION_STRING", None)
+
+    if os.environ.get("ENABLE_AGENT365_OBSERVABILITY", "false").lower() not in {"1", "true", "yes", "on"}:
+        os.environ["FOUNDRY_AGENT365_TRACING_ENABLED"] = "false"
+        os.environ.setdefault("ENABLE_A365_OBSERVABILITY", "false")
+        os.environ.setdefault("ENABLE_A365_OBSERVABILITY_EXPORTER", "false")
+
+
+configure_demo_observability()
+
 DB = os.environ.get("NEO4J_DATABASE", "companies")
 driver: Any = None  # initialised in main(); tools reference it via module lookup
 embeddings: Any = None  # OpenAIEmbeddingClient — initialised in main()
@@ -39,11 +53,10 @@ embeddings: Any = None  # OpenAIEmbeddingClient — initialised in main()
 class FreshWorkflowHostAgent(WorkflowAgent):
     """Build a fresh workflow agent per request.
 
-    The official agent-framework repo notes that sequential workflows should be
-    rebuilt to avoid stale session state when reused across runs. The hosted
-    server keeps a single workflow agent object alive, so this adapter remains
-    a real WorkflowAgent for the hosting layer while delegating each request to
-    a fresh inner workflow instance.
+    Sequential workflows should be rebuilt per request to avoid stale session
+    state when reused across runs. The hosted server keeps a single workflow
+    agent object alive, so this adapter remains a WorkflowAgent for the hosting
+    layer while delegating each request to a fresh inner workflow instance.
     """
 
     def __init__(self, factory: Any) -> None:
@@ -460,11 +473,11 @@ def main() -> None:
         credential = DefaultAzureCredential()
         embedding_credential = AsyncDefaultAzureCredential()
 
-    # OpenAIEmbeddingClient is the canonical agent-framework path for Entra-ID
-    # auth against an Azure OpenAI / Foundry endpoint. See microsoft/agent-framework:
+    # OpenAIEmbeddingClient provides Entra ID authentication against the
+    # Azure OpenAI / Foundry endpoint. See microsoft/agent-framework:
     # python/samples/02-agents/embeddings/openai_embeddings_on_azure.py
     embeddings = OpenAIEmbeddingClient(
-        model=os.environ.get("FOUNDRY_EMBEDDING_DEPLOYMENT_NAME", "text-embedding-3-small"),
+        model=os.environ.get("EMBEDDING_DEPLOYMENT_NAME", "text-embedding-3-small"),
         azure_endpoint=project_endpoint.split("/api/")[0],
         credential=embedding_credential,
     )

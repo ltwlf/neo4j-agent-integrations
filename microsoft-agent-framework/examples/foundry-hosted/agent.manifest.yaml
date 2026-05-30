@@ -18,8 +18,8 @@ template:
   environment_variables:
     - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
       value: "{{AZURE_AI_MODEL_DEPLOYMENT_NAME}}"
-    - name: FOUNDRY_EMBEDDING_DEPLOYMENT_NAME
-      value: ${FOUNDRY_EMBEDDING_DEPLOYMENT_NAME}
+    - name: EMBEDDING_DEPLOYMENT_NAME
+      value: ${EMBEDDING_DEPLOYMENT_NAME}
     - name: NEO4J_URI
       value: ${NEO4J_URI}
     - name: NEO4J_DATABASE

@@ -1,46 +1,46 @@
-# Foundry-hosted multi-agent — Microsoft Agent Framework + Neo4j
+# Foundry-hosted multi-agent - Microsoft Agent Framework + Neo4j
 
-Same multi-agent investment-research graph as [`../multi-agent/`](../multi-agent/) — a simple `SequentialBuilder` chain of specialist agents plus a final analyst — packaged as a [Foundry hosted agent](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agents) via [`agent-framework-foundry-hosting`](https://pypi.org/project/agent-framework-foundry-hosting/) (`ResponsesHostServer`). Deployed with the canonical [`azd ai agent init -m`](https://learn.microsoft.com/azure/foundry/agents/quickstarts/quickstart-hosted-agent) flow.
+This example packages the multi-agent investment-research workflow from [`../multi-agent/`](../multi-agent/) as a [Foundry hosted agent](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agents). The workflow uses a `SequentialBuilder` chain of specialist agents followed by a final analyst, and is served through `ResponsesHostServer` from [`agent-framework-foundry-hosting`](https://pypi.org/project/agent-framework-foundry-hosting/).
 
 ## Why host it?
 
-Hosted agents take the same Agent Framework code you ran locally and put it on Foundry's managed runtime. From the [official concepts page](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agents):
+Hosted agents run the same Agent Framework code on Foundry's managed runtime. The hosted runtime provides:
 
-- **Bring your own code** — Agent Framework, LangGraph, custom; the platform doesn't care.
-- **Dedicated agent identity** — a Microsoft Entra ID is auto-created at deploy and used by the agent at runtime to call models, tools, and downstream Azure services. No managed-identity wiring.
-- **Per-session VM-isolated sandboxes** — each session gets its own isolated sandbox; `$HOME` and `/files` persist across turns and idle periods, with compute deprovisioned after 15 minutes idle and restored on resume (up to 30-day session lifetime).
-- **Versioning** — immutable agent versions with weighted traffic split for canary and blue-green rollouts.
-- **Scale-to-zero** — Foundry handles container lifecycle, scaling, and Application Insights observability.
-- **Foundry portal integration** — playground, version management, and traces, no extra wiring.
+- Support for custom agent code, including Agent Framework and LangGraph applications.
+- A dedicated Microsoft Entra identity for the hosted agent.
+- Per-session isolated sandboxes for runtime state.
+- Immutable agent versions.
+- Managed container lifecycle and scale-to-zero behavior.
+- Portal access for playground testing, version management, monitoring, and traces.
 
 ## Files in this folder
 
-Flat layout matching the canonical [agent-framework hosted samples](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents/responses):
+The example uses a flat layout that matches the [Agent Framework hosted samples](https://github.com/microsoft/agent-framework/tree/main/python/samples/04-hosting/foundry-hosted-agents/responses):
 
 | File | Purpose |
 | --- | --- |
-| `main.py` | The full hosted-agent definition: Neo4j `@tool` functions, specialist agent instructions, `SequentialBuilder`, and `ResponsesHostServer().run()`. Self-contained on purpose; [`../multi-agent/multi_agent_neo4j.py`](../multi-agent/multi_agent_neo4j.py) is a parallel near-identical file for local dev. |
-| `requirements.txt` | Python deps (split-package install — see local example README) |
-| `Dockerfile` | `python:3.12-slim`, exposes port 8088 |
-| `.dockerignore` | Excludes `.azure/`, `.env`, `__pycache__/`, etc. |
-| `agent.yaml` | Hosted-agent definition (protocol, resources, env vars) |
-| `agent.manifest.yaml` | Template metadata + model resource — `azd ai agent init -m` reads this |
-| `.env.example` | What to set locally for `python main.py` |
-| `README.md` | This file |
+| `main.py` | Defines the hosted agent: Neo4j tools, specialist instructions, the sequential workflow, credentials, and `ResponsesHostServer().run()`. It is self-contained so the hosted sample can be scaffolded by `azd`; [`../multi-agent/multi_agent_neo4j.py`](../multi-agent/multi_agent_neo4j.py) contains the local-only variant. |
+| `requirements.txt` | Python dependencies. The sample installs the Agent Framework split packages directly to avoid importing the empty `agent-framework` meta-package. |
+| `Dockerfile` | Container image for hosted deployment. It uses `python:3.12-slim`, installs `requirements.txt`, exposes port 8088, and starts `main.py`. |
+| `.dockerignore` | Keeps local environment files, azd state, caches, and virtual environments out of the container build context. |
+| `agent.yaml` | Hosted-agent definition used after scaffolding: agent name, protocol, resource limits, and runtime environment variables. |
+| `agent.manifest.yaml` | Manifest template used by `azd ai agent init -m` to generate the azd project and bind the model deployment. |
+| `.env.example` | Local environment template for running `python main.py` directly during development. |
+| `README.md` | Setup, local run, deployment, test, and cleanup instructions. |
 
 ## Quick demo
 
-For this repo, the easiest path is the one Microsoft documents for local testing of hosted agents: scaffold the `azd` project, point it at the existing Foundry project, and run it locally with `azd ai agent run`. That keeps the sample easy to understand and avoids provisioning extra demo infrastructure like ACR and Application Insights unless you actually want a managed deployment.
+The recommended demo path is to scaffold an `azd` project from the manifest, point it at the existing Foundry project, and run it locally with `azd ai agent run`. This validates the hosted-agent runtime before provisioning container hosting resources.
 
 ### Prerequisites
 
 ```bash
 azd ext install azure.ai.agents
 az login
-cd microsoft-foundry/infra && ./deploy.sh    # if you haven't already — provides the Foundry project
+cd microsoft-foundry/infra && ./deploy.sh    # if needed; provides the Foundry project
 ```
 
-`microsoft-foundry/infra/deploy.sh` deploys to Sweden Central by default — a hosted-agents-supported region — so the same project can host this example.
+`microsoft-foundry/infra/deploy.sh` deploys to Sweden Central by default, which supports hosted agents. Docker is not required for the local `azd ai agent run` path. The managed deployment path below uses remote ACR build, so Docker is not required locally for `azd up` either.
 
 ### Run locally with the hosted-agent runtime
 
@@ -55,43 +55,45 @@ manifest_path="$repo_root/microsoft-agent-framework/examples/foundry-hosted/agen
 PROJECT_ID="${FOUNDRY_PROJECT_ID:-/subscriptions/$AZURE_SUBSCRIPTION_ID/resourceGroups/$FOUNDRY_RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$FOUNDRY_ACCOUNT_NAME/projects/$FOUNDRY_PROJECT_NAME}"
 MODEL_DEPLOYMENT_NAME="$FOUNDRY_MODEL_DEPLOYMENT_NAME"
 
-cd "$repo_root"
-mkdir -p my-research-agent && cd my-research-agent
+cd "$repo_root/microsoft-agent-framework/examples"
+mkdir -p azd-workspace/foundry-hosted && cd azd-workspace/foundry-hosted
 
 # 1. Scaffold the hosted-agent azd project against the existing Foundry
 #    project + model.
 azd ai agent init \
   -m "$manifest_path" \
   -p "$PROJECT_ID" \
-  -d "$MODEL_DEPLOYMENT_NAME"
+  -d "$MODEL_DEPLOYMENT_NAME" \
+  --agent-name neo4j-research-agent-framework \
+  --no-prompt
 
 cd neo4j-research-agent-framework
 
-# 2. Wire Neo4j (defaults connect to the public companies demo graph) +
-#    the embedding deployment that microsoft-foundry/infra/ provisioned.
+# 2. Configure Neo4j (defaults connect to the public companies demo graph)
+#    and the embedding deployment.
 azd env set NEO4J_URI                       "neo4j+s://demo.neo4jlabs.com:7687"
 azd env set NEO4J_DATABASE                  "companies"
 azd env set NEO4J_USERNAME                  "companies"
 azd env set NEO4J_PASSWORD                  "companies"
 azd env set AZURE_TENANT_ID                 "$(az account show --query tenantId -o tsv)"
-azd env set FOUNDRY_EMBEDDING_DEPLOYMENT_NAME "text-embedding-3-small"
+azd env set EMBEDDING_DEPLOYMENT_NAME         "text-embedding-3-small"
 
 # 3. Run the hosted-agent runtime locally.
-azd ai agent run
+azd ai agent run --no-inspector
 ```
 
 In another terminal:
 
 ```bash
-azd ai agent invoke --local --new-session \
+azd ai agent invoke --local --new-session --timeout 600 \
   "Research Microsoft's position in the software industry. Gather company profile, recent news, and key relationships, then synthesize an investment outlook."
 ```
 
-`azd ai agent invoke --local` is the canonical local test path for the hosted-agent runtime. `--new-session` keeps repeated demo runs isolated instead of reusing the prior conversation automatically.
+`azd ai agent invoke --local` sends a request to the locally running hosted-agent runtime. `--new-session` keeps repeated demo runs isolated instead of reusing the prior conversation automatically.
 
 For local runs, this sample now prefers `AzureCliCredential` when the Azure CLI is available, then falls back to `DefaultAzureCredential` for hosted deployment scenarios. Setting `AZURE_TENANT_ID` in the `azd` environment keeps local auth deterministic when your CLI can see multiple tenants.
 
-You'll see a structured report — Executive Summary, Company Profile, Recent Developments, Network table, Risks & Outlook — with every `company_id` and `article_id` cited verbatim from the graph (real IDs like `EFhu1XwygPsKq_UjZtDFwXQ` and `ART11195006745`, not made-up placeholders).
+The response is a structured report with an Executive Summary, Company Profile, Recent Developments, Network table, and Risks & Outlook. IDs such as `company_id` and `article_id` are taken directly from the graph rows.
 
 ## Deploy to Foundry (optional)
 
@@ -101,28 +103,42 @@ If you want a managed endpoint in Foundry after validating the demo locally, run
 azd up
 ```
 
-from `my-research-agent/neo4j-research-agent-framework`.
+from `microsoft-agent-framework/examples/azd-workspace/foundry-hosted/neo4j-research-agent-framework`.
 
-That path follows the official hosted-agent flow: provision the small hosting resources for this agent, build the container remotely, push it to Azure Container Registry, and register the hosted agent version in the existing Foundry project.
+This provisions the hosting resources for the sample, builds and pushes the container image, and registers a hosted agent version in the selected Foundry project.
+
+Test the hosted agent from the CLI with a longer timeout:
+
+```bash
+azd ai agent invoke neo4j-research-agent-framework \
+  --new-session \
+  --timeout 600 \
+  "Research Microsoft's position in the software industry. Gather company profile, recent news, and key relationships, then synthesize an investment outlook."
+```
+
+The Foundry Playground is useful for short smoke tests. For the full prompt above, prefer `azd ai agent invoke`; the workflow performs several model and Neo4j tool calls, and the Playground may show a generic network timeout before the hosted agent finishes.
+
+After deployment, stream the hosted-agent logs with:
+
+```bash
+azd ai agent monitor --follow
+```
 
 ### Tear down
 
 ```bash
-# If you ran `azd up`, this removes the agent + any hosting resources
-# provisioned by THIS folder. The shared Foundry account/project from
-# microsoft-foundry/ stays alive — purge (`--purge`) would also delete
-# the shared account, so leave it off.
-azd down --no-prompt
+# Remove the local scaffold created by this README.
+rm -rf microsoft-agent-framework/examples/azd-workspace/foundry-hosted/neo4j-research-agent-framework
 ```
 
-To remove the entire shared deployment as well, run `azd down --purge --no-prompt` from `microsoft-foundry/infra/` afterwards.
+This example reuses the shared Foundry project from `microsoft-foundry/infra/`. Do not run `azd down` from the scaffold unless you have reviewed the deletion plan and intend to remove the listed shared resources. For Azure cleanup, delete only the hosted agent/version or sample-specific resources you created.
 
 ## How it differs from `../multi-agent/`
 
-Same agent graph, three differences in `main.py`:
+The hosted sample uses the same agent graph as `../multi-agent/`, with three hosted-runtime differences:
 
-1. **Tool decorator** — every Neo4j function is wrapped in `@tool(approval_mode="never_require")` with `Annotated[..., Field(description=...)]` parameter docs. Hosted agents default to requiring approval for tool calls; we opt out so the multi-agent flow runs unattended.
-2. **Credential** — CLI-first locally, hosted-safe in Azure: the sample uses `AzureCliCredential` when `az` is available, chained to `DefaultAzureCredential()` for deployed runtime fallback.
-3. **`default_options={"store": False}`** on each hosted agent — the hosting platform owns conversation history; don't double-persist on the OpenAI Responses side.
+1. **Tool approval** - Neo4j functions use `@tool(approval_mode="never_require")` with `Annotated[..., Field(description=...)]` parameter descriptions so the hosted workflow can run unattended.
+2. **Credentials** - local runs prefer `AzureCliCredential` when the Azure CLI is available, with `DefaultAzureCredential` as the hosted-runtime fallback.
+3. **Response storage** - each hosted agent uses `default_options={"store": False}` because the hosting platform owns conversation history.
 
-That's it. The multi-agent composition (`SequentialBuilder` specialists + analyst) and the anti-hallucination contract (JSON blocks per tool call, raw rows verbatim) are identical.
+The multi-agent composition and the row-grounded reporting contract are otherwise the same.
