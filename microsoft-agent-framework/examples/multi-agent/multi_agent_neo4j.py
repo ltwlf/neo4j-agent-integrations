@@ -4,9 +4,10 @@
 # dependencies = [
 #     # The meta-package "agent-framework" ships an empty __init__.py that
 #     # shadows -core's exports — so we depend on the split packages directly.
-#     "agent-framework-core>=1.2.1",
-#     "agent-framework-foundry>=1.2.1",
-#     "agent-framework-openai>=1.2.1",  # OpenAIEmbeddingClient (Entra-ID)
+#     "agent-framework-core>=1.7.0",
+#     "agent-framework-foundry>=1.7.0",
+#     "agent-framework-openai>=1.7.0",  # OpenAIEmbeddingClient (Entra-ID)
+#     "agent-framework-orchestrations>=1.0.0rc2",
 #     "aiohttp",  # azure-ai-projects async transport
 #     "azure-identity",
 #     "python-dotenv",
@@ -15,10 +16,11 @@
 # ///
 """Microsoft Agent Framework + Neo4j: multi-agent investment research, run locally.
 
-Implements the multi-agent spec from EXAMPLE_AGENT.md — Coordinator delegates
-to a Database Agent (10 typed Neo4j function tools) and an Analyst Agent
-(synthesis only). Self-contained on purpose; foundry-hosted/main.py is a
-parallel, near-identical file packaged for the Foundry hosted-agent runtime.
+Implements the multi-agent spec from EXAMPLE_AGENT.md as a simple sequential
+workflow: specialist agents gather profile, peers, news, relationships, and
+people from Neo4j, then a final analyst synthesizes the report.
+Self-contained on purpose; foundry-hosted/main.py is a parallel,
+near-identical file packaged for the Foundry hosted-agent runtime.
 """
 
 import asyncio
@@ -26,9 +28,11 @@ import os
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from agent_framework import Agent, AgentContext, FunctionInvocationContext
 from agent_framework.foundry import FoundryChatClient
+from agent_framework.orchestrations import SequentialBuilder
 from agent_framework.openai import OpenAIEmbeddingClient
 from azure.identity import AzureCliCredential
 from azure.identity.aio import AzureCliCredential as AsyncAzureCliCredential
@@ -38,8 +42,8 @@ from neo4j import GraphDatabase
 load_dotenv(Path(__file__).resolve().parents[3] / "microsoft-foundry" / ".env", override=True)
 
 DB = os.environ.get("NEO4J_DATABASE", "companies")
-driver = None  # initialised in main(); tools reference it via module lookup
-embeddings = None  # OpenAIEmbeddingClient — initialised in main()
+driver: Any = None  # initialised in main(); tools reference it via module lookup
+embeddings: Any = None  # OpenAIEmbeddingClient — initialised in main()
 
 
 # Discovery ---------------------------------------------------------------
@@ -74,6 +78,34 @@ def companies_in_industry(industry: str) -> list[dict]:
         LIMIT 10
     """, industry=industry, database_=DB)
     return [r.data() for r in rows]
+
+
+def resolve_industry_for_company(company_name: str, context: str = "") -> dict:
+    """Choose the most relevant IndustryCategory for a company, biased by the user task.
+
+    Returns the chosen industry plus all candidate categories so downstream agents
+    can stay grounded in the graph rather than guessing from an unordered list.
+    """
+    rows, _, _ = driver.execute_query("""
+        MATCH (o:Organization {name: $name})-[:HAS_CATEGORY]->(c:IndustryCategory)
+        RETURN c.name AS industry
+    """, name=company_name, database_=DB)
+    candidates = [r["industry"] for r in rows if r["industry"]]
+    context_lc = context.lower()
+
+    def score(industry: str) -> tuple[int, int, str]:
+        industry_lc = industry.lower()
+        score_value = 0
+        if industry_lc in context_lc:
+            score_value += 100
+        shared_terms = [term for term in industry_lc.replace("companies", "company").split() if term in context_lc]
+        score_value += 10 * len(shared_terms)
+        if "software" in industry_lc:
+            score_value += 5
+        return (score_value, len(industry_lc), industry)
+
+    chosen = max(candidates, key=score) if candidates else ""
+    return {"company_name": company_name, "industry": chosen, "candidates": candidates}
 
 
 # Profile -----------------------------------------------------------------
@@ -216,38 +248,89 @@ async def log_tool(context: FunctionInvocationContext, call_next: Callable[[], A
 
 # Agent instructions ------------------------------------------------------
 
-DATABASE_INSTRUCTIONS = """\
-You are a data-access agent over a Neo4j knowledge graph of companies (Organization),
-people (Person), industries (IndustryCategory), locations (City, Country), and
-articles (Article). Other agents call you to fetch facts.
-
-Tools (read-only):
-  Discovery: search_companies, list_industries, companies_in_industry
-  Profile:   query_company
-  Network:   analyze_relationships, people_at_company
-  News:      search_news (vector — needs a query string), articles_in_month, get_article, companies_in_article
-
+JSON_BLOCK_RULES = """\
 Output protocol — STRICT, machine-readable
-  Your reply is consumed by another agent, not a human. Output ONE fenced
-  ```json``` block per tool call you made, with this exact shape:
+    Your reply is consumed by another agent, not a human. Output ONE fenced
+    ```json``` block per tool call you made, with this exact shape:
 
-    ```json
-    {
-      "tool": "<tool name>",
-      "args": { ... what you passed in ... },
-      "rows": [ ... the tool result, verbatim, every field ... ]
-    }
-    ```
+        ```json
+        {
+            "tool": "<tool name>",
+            "args": { ... what you passed in ... },
+            "rows": [ ... the tool result, verbatim, every field ... ]
+        }
+        ```
 
-  Rules
-  • Include EVERY field the tool returned — `company_id`, `article_id`, `title`,
-    `date`, `sentiment`, `relationships`, `distance`, `industries`, `locations`,
-    `leadership`, etc. Real IDs look like `EIsFKrN_ZNLSWsvxdQfWutQ` and
-    `ART11195006745`; never shorten or substitute.
-  • If a tool returns no rows, set `"rows": []`.
-  • No prose. No summary. No headings. Only the JSON blocks, one per call.
-  • Never reason from prior knowledge — the only valid content is what the
-    tools returned this turn.
+Rules
+    • Include EVERY field the tool returned — `company_id`, `article_id`, `title`,
+        `date`, `sentiment`, `relationships`, `distance`, `industries`, `locations`,
+        `leadership`, etc. Real IDs look like `EIsFKrN_ZNLSWsvxdQfWutQ` and
+        `ART11195006745`; never shorten or substitute.
+    • If a tool returns a single object, wrap it in `"rows": [ ... ]`; if it is
+        empty, use `"rows": []`.
+    • No prose. No summary. No headings. Only the JSON blocks, one per call.
+    • Never reason from prior knowledge — the only valid content is what the
+        tools returned this turn.
+"""
+
+PROFILE_INSTRUCTIONS = f"""\
+You are the profile specialist over a Neo4j knowledge graph of companies, people,
+industries, locations, and articles.
+
+Task
+    • Resolve the target company from the user request.
+    • Call `query_company` exactly once for that company.
+
+{JSON_BLOCK_RULES}
+"""
+
+PEERS_INSTRUCTIONS = f"""\
+You are the industry-peers specialist over a Neo4j knowledge graph.
+
+Task
+    • Read the prior conversation to resolve the target company and the user's
+        intended industry framing.
+    • Call `resolve_industry_for_company` exactly once with the company name and
+        the relevant conversation context.
+    • Then call `companies_in_industry` exactly once with the resolved industry.
+    • If no industry is resolved, call `list_industries` once and pick the closest
+        matching industry before calling `companies_in_industry`.
+
+{JSON_BLOCK_RULES}
+"""
+
+NEWS_INSTRUCTIONS = f"""\
+You are the news specialist over a Neo4j knowledge graph.
+
+Task
+    • Resolve the company name from the user request or prior JSON blocks.
+    • Use `search_companies` if needed to disambiguate the name.
+    • Call `search_news` exactly once for the resolved company using a query such
+        as `recent news`.
+
+{JSON_BLOCK_RULES}
+"""
+
+RELATIONSHIPS_INSTRUCTIONS = f"""\
+You are the relationships specialist over a Neo4j knowledge graph.
+
+Task
+    • Resolve the target company from the user request or prior JSON blocks.
+    • Call `analyze_relationships` exactly once for that company.
+
+{JSON_BLOCK_RULES}
+"""
+
+PEOPLE_INSTRUCTIONS = f"""\
+You are the people specialist over a Neo4j knowledge graph.
+
+Task
+    • Read the prior conversation, especially the profile specialist's JSON block.
+    • Use the `company_id` from that block when available.
+    • If it is missing, call `query_company` once to resolve it.
+    • Call `people_at_company` exactly once with the resolved `company_id`.
+
+{JSON_BLOCK_RULES}
 """
 
 ANALYST_INSTRUCTIONS = """\
@@ -279,29 +362,6 @@ Rules — STRICT, no exceptions
   • Insight is welcome in Risks & Outlook only, and only insight that follows
     directly from the rows.
 """
-
-COORDINATOR_INSTRUCTIONS = """\
-You orchestrate investment research. You delegate to two specialists:
-
-  database_agent — fetches rows from the graph. Returns one or more
-                   ```json``` blocks per call, each with `tool`, `args`,
-                   and `rows`.
-  analyst        — turns those JSON blocks into an investment-research report.
-
-Workflow
-  1. Call `database_agent` once per facet: company profile, peers, recent
-     news, relationships, key people. Each call should be a focused request
-     like "query_company('Microsoft')" or
-     "companies_in_industry('Software Companies')".
-  2. CONCATENATE every `database_agent` response verbatim into one string
-     and pass that string as the `task` to `analyst`. The analyst MUST see
-     the raw JSON blocks — never strip them down to bare IDs or summaries.
-  3. Return the analyst's report verbatim — don't paraphrase or re-summarize.
-
-Never query the graph yourself. Never write the report yourself. Faithful
-relaying is your job.
-"""
-
 
 # Entry -------------------------------------------------------------------
 
@@ -344,42 +404,70 @@ async def main() -> None:
             credential=AzureCliCredential(tenant_id=tenant_id),
         )
 
-        # Names match EXAMPLE_AGENT.md — `database_agent`, `analyst`,
-        # `coordinator` — so the trace and instructions read consistently
-        # across the spec, the code, and the model's tool-call surface.
-        database_agent = Agent(
+        agent_options = {"store": False}
+
+        # Official Agent Framework samples now favor workflow builders such as
+        # SequentialBuilder for deterministic multi-agent chains. We model each
+        # research facet as a specialist agent, then wrap the workflow as a
+        # single runnable agent.
+        profile_agent = Agent(
             client=client,
             middleware=[log_agent, log_tool],
-            name="database_agent",
-            instructions=DATABASE_INSTRUCTIONS,
-            tools=DATABASE_TOOLS,
+            name="profile_agent",
+            instructions=PROFILE_INSTRUCTIONS,
+            tools=[query_company],
+            default_options=agent_options,
+        )
+        peers_agent = Agent(
+            client=client,
+            middleware=[log_agent, log_tool],
+            name="peers_agent",
+            instructions=PEERS_INSTRUCTIONS,
+            tools=[resolve_industry_for_company, list_industries, companies_in_industry],
+            default_options=agent_options,
+        )
+        news_agent = Agent(
+            client=client,
+            middleware=[log_agent, log_tool],
+            name="news_agent",
+            instructions=NEWS_INSTRUCTIONS,
+            tools=[search_companies, search_news],
+            default_options=agent_options,
+        )
+        relationships_agent = Agent(
+            client=client,
+            middleware=[log_agent, log_tool],
+            name="relationships_agent",
+            instructions=RELATIONSHIPS_INSTRUCTIONS,
+            tools=[analyze_relationships],
+            default_options=agent_options,
+        )
+        people_agent = Agent(
+            client=client,
+            middleware=[log_agent, log_tool],
+            name="people_agent",
+            instructions=PEOPLE_INSTRUCTIONS,
+            tools=[query_company, people_at_company],
+            default_options=agent_options,
         )
         analyst_agent = Agent(
             client=client,
             middleware=[log_agent, log_tool],
             name="analyst",
             instructions=ANALYST_INSTRUCTIONS,
+            default_options=agent_options,
         )
-        coordinator = Agent(
-            client=client,
-            middleware=[log_agent, log_tool],
-            name="coordinator",
-            instructions=COORDINATOR_INSTRUCTIONS,
-            tools=[
-                database_agent.as_tool(
-                    name="database_agent",
-                    description="Fetch company / news / relationship / people rows from the Neo4j graph. Always returns IDs for follow-up calls.",
-                    arg_name="task",
-                    arg_description="What to fetch — be specific (which company, what aspect).",
-                ),
-                analyst_agent.as_tool(
-                    name="analyst",
-                    description="Synthesize gathered rows into an investment-research report.",
-                    arg_name="task",
-                    arg_description="Pass the rows the database agent returned, plus the analysis goal.",
-                ),
+        workflow = SequentialBuilder(
+            participants=[
+                profile_agent,
+                peers_agent,
+                news_agent,
+                relationships_agent,
+                people_agent,
+                analyst_agent,
             ],
         )
+        workflow_agent = workflow.build().as_agent()
 
         question = os.environ.get(
             "FOUNDRY_QUESTION",
@@ -388,7 +476,7 @@ async def main() -> None:
             "investment outlook.",
         )
         print(f"> {question}\n")
-        result = await coordinator.run(question)
+        result = await workflow_agent.run(question)
         print(result)
     finally:
         await embed_credential.close()

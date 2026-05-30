@@ -89,7 +89,7 @@ deployment also creates:
   with `allowProjectManagement: true`)
 - Foundry project: `proj-foundry-neo4j-dev`
 - Model deployment: `gpt-5-mini`
-  (version `2025-08-07`, `GlobalStandard`, capacity 30)
+  (version `2025-08-07`, `GlobalStandard`, capacity 120)
 - Foundry User role assignment for the signed-in user on the
   Foundry **project**, so `az login` is all the auth the examples
   need (create/run agents, call models via the project endpoint)
@@ -137,6 +137,8 @@ Important knobs (full list in `infra/.env.sample`):
 | `NEO4J_MCP_CONTAINER_IMAGE` | `mcp/neo4j:latest` | Pin a tested tag. |
 | `MCP_EXTERNAL_INGRESS` | `true` | Public HTTPS. `false` makes it internal. |
 | `MCP_MIN_REPLICAS` | `1` | Warm endpoint. Set `0` if cold starts are fine. |
+| `FOUNDRY_MODEL_CAPACITY` | `120` | Chat-model TPM capacity for the Foundry deployment. |
+| `FOUNDRY_EMBEDDING_MODEL_CAPACITY` | `30` | Embedding-model TPM capacity for vector search. |
 
 ## Authentication Model
 

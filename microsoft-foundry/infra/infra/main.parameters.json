@@ -66,7 +66,19 @@
       "value": "${FOUNDRY_MODEL_SKU=GlobalStandard}"
     },
     "foundryModelCapacity": {
-      "value": "${FOUNDRY_MODEL_CAPACITY=30}"
+      "value": "${FOUNDRY_MODEL_CAPACITY=120}"
+    },
+    "foundryEmbeddingModelName": {
+      "value": "${FOUNDRY_EMBEDDING_MODEL_NAME=text-embedding-3-small}"
+    },
+    "foundryEmbeddingModelVersion": {
+      "value": "${FOUNDRY_EMBEDDING_MODEL_VERSION=1}"
+    },
+    "foundryEmbeddingModelSkuName": {
+      "value": "${FOUNDRY_EMBEDDING_MODEL_SKU=GlobalStandard}"
+    },
+    "foundryEmbeddingModelCapacity": {
+      "value": "${FOUNDRY_EMBEDDING_MODEL_CAPACITY=30}"
     },
     "principalId": {
       "value": "${AZURE_PRINCIPAL_ID=}"

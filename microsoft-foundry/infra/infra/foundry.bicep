@@ -167,6 +167,7 @@ resource deployerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04
 }
 
 output accountName string = foundryAccount.name
+output projectId string = foundryProject.id
 output projectName string = foundryProject.name
 output projectEndpoint string = foundryProject.properties.endpoints['AI Foundry API']
 output modelDeploymentName string = modelDeployment.name

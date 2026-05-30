@@ -2,22 +2,29 @@
 """Microsoft Agent Framework + Neo4j: multi-agent investment research,
 packaged as a Foundry hosted agent.
 
-Implements the multi-agent spec from EXAMPLE_AGENT.md — Coordinator delegates
-to a Database Agent (10 typed Neo4j function tools) and an Analyst Agent
-(synthesis only). Wrapped with ResponsesHostServer for Foundry hosted-agent
-deployment. Self-contained on purpose; ../multi-agent/multi_agent_neo4j.py
-is a parallel, near-identical file for the local-dev runtime.
+Implements the multi-agent spec from EXAMPLE_AGENT.md as a simple sequential
+workflow: specialist agents gather profile, peers, news, relationships, and
+people from Neo4j, then a final analyst synthesizes the report.
+Wrapped with ResponsesHostServer for Foundry hosted-agent deployment.
+Self-contained on purpose; ../multi-agent/multi_agent_neo4j.py is a parallel,
+near-identical file for the local-dev runtime.
 """
 
 import asyncio
 import os
+import shutil
 from typing import Annotated
+from typing import Any
 
-from agent_framework import Agent, tool
+from agent_framework import Agent, WorkflowAgent, tool
 from agent_framework.foundry import FoundryChatClient
+from agent_framework.orchestrations import SequentialBuilder
 from agent_framework.openai import OpenAIEmbeddingClient
 from agent_framework_foundry_hosting import ResponsesHostServer
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential, ChainedTokenCredential, DefaultAzureCredential
+from azure.identity.aio import AzureCliCredential as AsyncAzureCliCredential
+from azure.identity.aio import ChainedTokenCredential as AsyncChainedTokenCredential
+from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from pydantic import Field
@@ -25,8 +32,87 @@ from pydantic import Field
 load_dotenv()
 
 DB = os.environ.get("NEO4J_DATABASE", "companies")
-driver = None  # initialised in main(); tools reference it via module lookup
-embeddings = None  # OpenAIEmbeddingClient — initialised in main()
+driver: Any = None  # initialised in main(); tools reference it via module lookup
+embeddings: Any = None  # OpenAIEmbeddingClient — initialised in main()
+
+
+class FreshWorkflowHostAgent(WorkflowAgent):
+    """Build a fresh workflow agent per request.
+
+    The official agent-framework repo notes that sequential workflows should be
+    rebuilt to avoid stale session state when reused across runs. The hosted
+    server keeps a single workflow agent object alive, so this adapter remains
+    a real WorkflowAgent for the hosting layer while delegating each request to
+    a fresh inner workflow instance.
+    """
+
+    def __init__(self, factory: Any) -> None:
+        prototype = factory()
+        super().__init__(
+            prototype.workflow,
+            id=prototype.id,
+            name=prototype.name,
+            description=prototype.description,
+        )
+        self._factory = factory
+        self._request_lock = asyncio.Lock()
+        self._active_task: asyncio.Task[Any] | None = None
+        self._active_agent: WorkflowAgent | None = None
+
+    async def _acquire_agent(self) -> WorkflowAgent:
+        current_task = asyncio.current_task()
+        if current_task is None:
+            raise RuntimeError("FreshWorkflowHostAgent requires an active asyncio task.")
+        if self._active_task is current_task:
+            if self._active_agent is None:
+                raise RuntimeError("Workflow task state is inconsistent.")
+            return self._active_agent
+        await self._request_lock.acquire()
+        self._active_task = current_task
+        self._active_agent = self._factory()
+        return self._active_agent
+
+    def _release_agent(self) -> None:
+        self._active_task = None
+        self._active_agent = None
+        self.pending_requests.clear()
+        if self._request_lock.locked():
+            self._request_lock.release()
+
+    @staticmethod
+    def _is_restore_only_call(messages: Any, checkpoint_id: str | None) -> bool:
+        return messages is None and checkpoint_id is not None
+
+    def run(self, messages: Any = None, **kwargs: Any) -> Any:
+        kwargs.pop("options", None)
+        checkpoint_id = kwargs.get("checkpoint_id")
+        keep_agent = self._is_restore_only_call(messages, checkpoint_id)
+        stream = kwargs.get("stream", False)
+
+        if stream:
+            async def _stream() -> Any:
+                agent = await self._acquire_agent()
+                try:
+                    async for update in agent.run(messages, **kwargs):
+                        self._pending_requests = dict(agent.pending_requests)
+                        yield update
+                finally:
+                    if not keep_agent:
+                        self._release_agent()
+
+            return _stream()
+
+        async def _run() -> Any:
+            agent = await self._acquire_agent()
+            try:
+                response = await agent.run(messages, **kwargs)
+                self._pending_requests = dict(agent.pending_requests)
+                return response
+            finally:
+                if not keep_agent:
+                    self._release_agent()
+
+        return _run()
 
 
 # Discovery ---------------------------------------------------------------
@@ -68,6 +154,34 @@ def companies_in_industry(
         LIMIT 10
     """, industry=industry, database_=DB)
     return [r.data() for r in rows]
+
+
+@tool(approval_mode="never_require")
+def resolve_industry_for_company(
+    company_name: Annotated[str, Field(description="The company's exact name.")],
+    context: Annotated[str, Field(description="Relevant user/request context that hints at which industry framing matters most.")] = "",
+) -> dict:
+    """Choose the most relevant IndustryCategory for a company, biased by the request context."""
+    rows, _, _ = driver.execute_query("""
+        MATCH (o:Organization {name: $name})-[:HAS_CATEGORY]->(c:IndustryCategory)
+        RETURN c.name AS industry
+    """, name=company_name, database_=DB)
+    candidates = [r["industry"] for r in rows if r["industry"]]
+    context_lc = context.lower()
+
+    def score(industry: str) -> tuple[int, int, str]:
+        industry_lc = industry.lower()
+        score_value = 0
+        if industry_lc in context_lc:
+            score_value += 100
+        shared_terms = [term for term in industry_lc.replace("companies", "company").split() if term in context_lc]
+        score_value += 10 * len(shared_terms)
+        if "software" in industry_lc:
+            score_value += 5
+        return (score_value, len(industry_lc), industry)
+
+    chosen = max(candidates, key=score) if candidates else ""
+    return {"company_name": company_name, "industry": chosen, "candidates": candidates}
 
 
 # Profile -----------------------------------------------------------------
@@ -204,48 +318,89 @@ def companies_in_article(
     return [r.data() for r in rows]
 
 
-DATABASE_TOOLS = [
-    search_companies, list_industries, companies_in_industry,
-    query_company,
-    analyze_relationships, people_at_company,
-    search_news, articles_in_month, get_article, companies_in_article,
-]
-
-
-# Agent instructions ------------------------------------------------------
-
-DATABASE_INSTRUCTIONS = """\
-You are a data-access agent over a Neo4j knowledge graph of companies (Organization),
-people (Person), industries (IndustryCategory), locations (City, Country), and
-articles (Article). Other agents call you to fetch facts.
-
-Tools (read-only):
-  Discovery: search_companies, list_industries, companies_in_industry
-  Profile:   query_company
-  Network:   analyze_relationships, people_at_company
-  News:      search_news (vector — needs a query string), articles_in_month, get_article, companies_in_article
-
+JSON_BLOCK_RULES = """\
 Output protocol — STRICT, machine-readable
-  Your reply is consumed by another agent, not a human. Output ONE fenced
-  ```json``` block per tool call you made, with this exact shape:
+    Your reply is consumed by another agent, not a human. Output ONE fenced
+    ```json``` block per tool call you made, with this exact shape:
 
-    ```json
-    {
-      "tool": "<tool name>",
-      "args": { ... what you passed in ... },
-      "rows": [ ... the tool result, verbatim, every field ... ]
-    }
-    ```
+        ```json
+        {
+            "tool": "<tool name>",
+            "args": { ... what you passed in ... },
+            "rows": [ ... the tool result, verbatim, every field ... ]
+        }
+        ```
 
-  Rules
-  • Include EVERY field the tool returned — `company_id`, `article_id`, `title`,
-    `date`, `sentiment`, `relationships`, `distance`, `industries`, `locations`,
-    `leadership`, etc. Real IDs look like `EIsFKrN_ZNLSWsvxdQfWutQ` and
-    `ART11195006745`; never shorten or substitute.
-  • If a tool returns no rows, set `"rows": []`.
-  • No prose. No summary. No headings. Only the JSON blocks, one per call.
-  • Never reason from prior knowledge — the only valid content is what the
-    tools returned this turn.
+Rules
+    • Include EVERY field the tool returned — `company_id`, `article_id`, `title`,
+        `date`, `sentiment`, `relationships`, `distance`, `industries`, `locations`,
+        `leadership`, etc. Real IDs look like `EIsFKrN_ZNLSWsvxdQfWutQ` and
+        `ART11195006745`; never shorten or substitute.
+    • If a tool returns a single object, wrap it in `"rows": [ ... ]`; if it is
+        empty, use `"rows": []`.
+    • No prose. No summary. No headings. Only the JSON blocks, one per call.
+    • Never reason from prior knowledge — the only valid content is what the
+        tools returned this turn.
+"""
+
+PROFILE_INSTRUCTIONS = f"""\
+You are the profile specialist over a Neo4j knowledge graph of companies, people,
+industries, locations, and articles.
+
+Task
+    • Resolve the target company from the user request.
+    • Call `query_company` exactly once for that company.
+
+{JSON_BLOCK_RULES}
+"""
+
+PEERS_INSTRUCTIONS = f"""\
+You are the industry-peers specialist over a Neo4j knowledge graph.
+
+Task
+    • Read the prior conversation to resolve the target company and the user's
+        intended industry framing.
+    • Call `resolve_industry_for_company` exactly once with the company name and
+        the relevant conversation context.
+    • Then call `companies_in_industry` exactly once with the resolved industry.
+    • If no industry is resolved, call `list_industries` once and pick the closest
+        matching industry before calling `companies_in_industry`.
+
+{JSON_BLOCK_RULES}
+"""
+
+NEWS_INSTRUCTIONS = f"""\
+You are the news specialist over a Neo4j knowledge graph.
+
+Task
+    • Resolve the company name from the user request or prior JSON blocks.
+    • Use `search_companies` if needed to disambiguate the name.
+    • Call `search_news` exactly once for the resolved company using a query such
+        as `recent news`.
+
+{JSON_BLOCK_RULES}
+"""
+
+RELATIONSHIPS_INSTRUCTIONS = f"""\
+You are the relationships specialist over a Neo4j knowledge graph.
+
+Task
+    • Resolve the target company from the user request or prior JSON blocks.
+    • Call `analyze_relationships` exactly once for that company.
+
+{JSON_BLOCK_RULES}
+"""
+
+PEOPLE_INSTRUCTIONS = f"""\
+You are the people specialist over a Neo4j knowledge graph.
+
+Task
+    • Read the prior conversation, especially the profile specialist's JSON block.
+    • Use the `company_id` from that block when available.
+    • If it is missing, call `query_company` once to resolve it.
+    • Call `people_at_company` exactly once with the resolved `company_id`.
+
+{JSON_BLOCK_RULES}
 """
 
 ANALYST_INSTRUCTIONS = """\
@@ -278,29 +433,6 @@ Rules — STRICT, no exceptions
     directly from the rows.
 """
 
-COORDINATOR_INSTRUCTIONS = """\
-You orchestrate investment research. You delegate to two specialists:
-
-  database_agent — fetches rows from the graph. Returns one or more
-                   ```json``` blocks per call, each with `tool`, `args`,
-                   and `rows`.
-  analyst        — turns those JSON blocks into an investment-research report.
-
-Workflow
-  1. Call `database_agent` once per facet: company profile, peers, recent
-     news, relationships, key people. Each call should be a focused request
-     like "query_company('Microsoft')" or
-     "companies_in_industry('Software Companies')".
-  2. CONCATENATE every `database_agent` response verbatim into one string
-     and pass that string as the `task` to `analyst`. The analyst MUST see
-     the raw JSON blocks — never strip them down to bare IDs or summaries.
-  3. Return the analyst's report verbatim — don't paraphrase or re-summarize.
-
-Never query the graph yourself. Never write the report yourself. Faithful
-relaying is your job.
-"""
-
-
 # Server ------------------------------------------------------------------
 
 def main() -> None:
@@ -313,11 +445,20 @@ def main() -> None:
               os.environ.get("NEO4J_PASSWORD", "companies")),
     )
 
-    # Single sync DefaultAzureCredential reused by both clients. Sync is fine
-    # here — both clients accept TokenCredential | AsyncTokenCredential, and
-    # the sync variant has no async session to leak across the long-running
-    # ResponsesHostServer process.
-    credential = DefaultAzureCredential()
+    tenant_id = os.environ.get("AZURE_TENANT_ID")
+    cli_kwargs = {"tenant_id": tenant_id} if tenant_id else {}
+    if shutil.which("az"):
+        credential = ChainedTokenCredential(
+            AzureCliCredential(**cli_kwargs),
+            DefaultAzureCredential(),
+        )
+        embedding_credential = AsyncChainedTokenCredential(
+            AsyncAzureCliCredential(**cli_kwargs),
+            AsyncDefaultAzureCredential(),
+        )
+    else:
+        credential = DefaultAzureCredential()
+        embedding_credential = AsyncDefaultAzureCredential()
 
     # OpenAIEmbeddingClient is the canonical agent-framework path for Entra-ID
     # auth against an Azure OpenAI / Foundry endpoint. See microsoft/agent-framework:
@@ -325,7 +466,7 @@ def main() -> None:
     embeddings = OpenAIEmbeddingClient(
         model=os.environ.get("FOUNDRY_EMBEDDING_DEPLOYMENT_NAME", "text-embedding-3-small"),
         azure_endpoint=project_endpoint.split("/api/")[0],
-        credential=credential,
+        credential=embedding_credential,
     )
 
     client = FoundryChatClient(
@@ -334,45 +475,63 @@ def main() -> None:
         credential=credential,
     )
 
-    # Names match EXAMPLE_AGENT.md — `database_agent`, `analyst`,
-    # `coordinator` — so the trace and instructions read consistently
-    # across the spec, the code, and the model's tool-call surface.
-    database_agent = Agent(
-        client=client,
-        name="database_agent",
-        instructions=DATABASE_INSTRUCTIONS,
-        tools=DATABASE_TOOLS,
-    )
-    analyst_agent = Agent(
-        client=client,
-        name="analyst",
-        instructions=ANALYST_INSTRUCTIONS,
-    )
-    coordinator = Agent(
-        client=client,
-        name="coordinator",
-        instructions=COORDINATOR_INSTRUCTIONS,
-        tools=[
-            database_agent.as_tool(
-                name="database_agent",
-                description="Fetch company / news / relationship / people rows from the Neo4j graph. Returns JSON blocks with raw rows.",
-                arg_name="task",
-                arg_description="What to fetch — be specific (which company, what aspect).",
-            ),
-            analyst_agent.as_tool(
-                name="analyst",
-                description="Synthesize JSON rows from `database_agent` into an investment-research report.",
-                arg_name="task",
-                arg_description="Concatenated JSON blocks the database agent returned, plus the analysis goal.",
-            ),
-        ],
-        # The Foundry hosting infrastructure manages conversation history;
-        # don't double-persist on the OpenAI Responses side.
-        default_options={"store": False},
-    )
+    agent_options = {"store": False}
+
+    def build_workflow_agent() -> Any:
+        profile_agent = Agent(
+            client=client,
+            name="profile_agent",
+            instructions=PROFILE_INSTRUCTIONS,
+            tools=[query_company],
+            default_options=agent_options,
+        )
+        peers_agent = Agent(
+            client=client,
+            name="peers_agent",
+            instructions=PEERS_INSTRUCTIONS,
+            tools=[resolve_industry_for_company, list_industries, companies_in_industry],
+            default_options=agent_options,
+        )
+        news_agent = Agent(
+            client=client,
+            name="news_agent",
+            instructions=NEWS_INSTRUCTIONS,
+            tools=[search_companies, search_news],
+            default_options=agent_options,
+        )
+        relationships_agent = Agent(
+            client=client,
+            name="relationships_agent",
+            instructions=RELATIONSHIPS_INSTRUCTIONS,
+            tools=[analyze_relationships],
+            default_options=agent_options,
+        )
+        people_agent = Agent(
+            client=client,
+            name="people_agent",
+            instructions=PEOPLE_INSTRUCTIONS,
+            tools=[query_company, people_at_company],
+            default_options=agent_options,
+        )
+        analyst_agent = Agent(
+            client=client,
+            name="analyst",
+            instructions=ANALYST_INSTRUCTIONS,
+            default_options=agent_options,
+        )
+        return SequentialBuilder(
+            participants=[
+                profile_agent,
+                peers_agent,
+                news_agent,
+                relationships_agent,
+                people_agent,
+                analyst_agent,
+            ],
+        ).build().as_agent()
 
     try:
-        ResponsesHostServer(coordinator).run()
+        ResponsesHostServer(FreshWorkflowHostAgent(build_workflow_agent)).run()
     finally:
         driver.close()
 

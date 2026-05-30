@@ -3,14 +3,14 @@
 [Microsoft Agent Framework](https://learn.microsoft.com/agent-framework/overview/) is Microsoft's open-source SDK for building production AI agents in Python and .NET — single agents, multi-agent workflows, and hosted-agent deployment.
 Neo4j is the graph database and knowledge layer that grounds those agents in connected enterprise data.
 
-This example wires them together as a multi-agent investment-research assistant: a **Coordinator** delegates to a **Database** agent (queries Neo4j) and an **Analyst** (synthesizes a report). One uv-runnable file. Reads `microsoft-foundry/.env` for the Foundry endpoint and Neo4j credentials.
+This example wires them together as a multi-agent investment-research assistant: a small set of **specialist agents** gather grounded data from Neo4j, then a final **Analyst** synthesizes the report. One uv-runnable file. Reads `microsoft-foundry/.env` for the Foundry endpoint and Neo4j credentials.
 
 Tool names and return shapes follow the [`EXAMPLE_AGENT.md`](../../../EXAMPLE_AGENT.md) spec ("Industry Research Agent").
 
 ## When to pick this path
 
 - You want to see how Agent Framework composes multiple agents.
-- A single fat agent with twenty tools loses focus — splitting work into a Database agent and an Analyst produces sharper, more grounded output.
+- A single fat agent with many tools loses focus — splitting work into a few specialists plus an analyst keeps the demo easy to follow while producing sharper, more grounded output.
 - Function tools talk to Neo4j directly via the Bolt driver — no MCP server, no extra hop.
 
 ## Quick start
@@ -23,28 +23,33 @@ cd ../../microsoft-agent-framework/examples/multi-agent && uv run multi_agent_ne
 
 `uv` reads the inline `# /// script` deps at the top of `multi_agent_neo4j.py` and runs. The script reads `microsoft-foundry/.env` for the Foundry endpoint, Azure tenant, and Neo4j credentials.
 
-## The three agents
+## The workflow
 
 ```mermaid
 flowchart LR
-    user["User"] --> coord
-    subgraph agents["Multi-agent system"]
-        coord["Coordinator Agent<br/>(delegates)"]
-        db["Database Agent<br/>(10 Neo4j functions)"]
-        analyst["Analyst Agent<br/>(no tools — synthesis)"]
+    user["User"] --> profile
+    subgraph agents["SequentialBuilder specialist workflow"]
+        profile["Profile"]
+        peers["Peers"]
+        news["News"]
+        relationships["Relationships"]
+        people["People"]
+        analyst["Analyst"]
     end
-    coord -->|as_tool| db
-    coord -->|as_tool| analyst
-    db -->|neo4j Bolt driver| neo4j[("Neo4j Aura<br/>(companies demo graph)")]
+    profile --> peers --> news --> relationships --> people --> analyst
+    profile -->|Neo4j tools| neo4j[("Neo4j Aura<br/>(companies demo graph)")]
+    peers -->|Neo4j tools| neo4j
+    news -->|Neo4j tools + embeddings| neo4j
+    relationships -->|Neo4j tools| neo4j
+    people -->|Neo4j tools| neo4j
 ```
 
-| Agent | Tools | Job |
+| Stage | Tools | Job |
 | --- | --- | --- |
-| **Coordinator Agent** | `database_agent.as_tool()`, `analyst_agent.as_tool()` | Orchestrates: delegates one focused question per facet to the Database Agent, concatenates responses, passes to the Analyst Agent. Never queries the graph or writes the report itself. |
-| **Database Agent** | 10 typed Neo4j functions | Calls the right tool for the request, returns one ```json``` block per call (raw rows verbatim — every `company_id`, `article_id`, title, date, sentiment, relationship type). No prose. |
-| **Analyst Agent** | none | Reads the JSON blocks, produces a structured report: Executive Summary, Profile, Recent Developments, Network table, Risks & Outlook. Cites IDs verbatim from the rows. |
+| **Profile / Peers / News / Relationships / People** | Focused subsets of the Neo4j tools | Each specialist handles one facet of the research request and emits strict JSON blocks with raw rows. |
+| **Analyst** | none | Reads the accumulated JSON blocks and produces the final structured report. |
 
-Composition is two `Agent.as_tool()` calls handed to the Coordinator's `tools=` — that's the whole multi-agent surface. The script is intentionally self-contained; [`../foundry-hosted/main.py`](../foundry-hosted/main.py) is a parallel near-identical file packaged for the Foundry hosted-agent runtime.
+Composition is a `SequentialBuilder` chain of six small agents: five research specialists followed by one analyst. The script is intentionally self-contained; [`../foundry-hosted/main.py`](../foundry-hosted/main.py) is a parallel near-identical file packaged for the Foundry hosted-agent runtime.
 
 ## Function tools (Neo4j)
 
@@ -59,10 +64,10 @@ Plain Python functions with type hints and docstrings. Agent Framework auto-conv
 
 ## Anti-hallucination contract
 
-`as_tool()` only forwards the inner agent's text to the parent — easy for an inner agent to silently summarise IDs away. Three guarantees in the instructions:
+The workflow keeps each research step narrow and grounded. Three guarantees in the instructions:
 
-1. **Database Agent** emits one fenced ```json``` block per tool call (`tool`, `args`, `rows`). No prose, no summaries.
-2. **Coordinator** passes those JSON blocks verbatim into the Analyst's `task`. Never strips down to bare IDs.
+1. **Specialist agents** emit fenced ```json``` blocks per tool call (`tool`, `args`, `rows`). No prose, no summaries.
+2. **SequentialBuilder** carries those JSON blocks forward through the shared conversation, so the Analyst sees the raw rows from earlier steps.
 3. **Analyst Agent** must cite every `company_id`, `article_id`, title, and relationship type from the rows. Real IDs look like `EIsFKrN_ZNLSWsvxdQfWutQ` / `ART11195006745` — short placeholders ("101", "AWS partnership") are flagged in the prompt as hallucination.
 
 Result: every value in the report appears verbatim in a tool result.
